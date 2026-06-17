@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Absensi Online</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/html5-qrcode"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans pb-10">
+
+    <div class="max-w-xl mx-auto mt-10 p-6 bg-white rounded-lg shadow-md">
+        
+        <h1 class="text-2xl font-extrabold text-center text-gray-900 mb-6">Sistem Absensi Online</h1>
+
+        <div class="flex justify-center mb-6 space-x-4 border-b pb-4">
+            <button onclick="switchTab('user')" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 font-semibold transition">Panel Pengguna</button>
+            <button onclick="switchTab('admin')" class="px-4 py-2 bg-gray-800 text-white rounded hover:bg-gray-900 font-semibold transition">Panel Admin</button>
+        </div>
+
+        <div id="user-section">
+            <h2 class="text-lg font-semibold text-center mb-4 text-gray-700">Form Absensi</h2>
+            
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-1">Nama Lengkap</label>
+                <input type="text" id="nama-user" placeholder="Masukkan nama Anda..." class="w-full p-2 border rounded focus:ring focus:ring-blue-200 outline-none">
+            </div>
+
+            <button onclick="mulaiScanner()" class="w-full bg-green-500 text-white py-2 rounded font-semibold hover:bg-green-600 mb-4 transition">Mulai Scan QR</button>
+
+            <div id="scanner-container" class="hidden">
+                <div id="reader" class="w-full bg-gray-100 border-2 border-dashed border-gray-400 flex items-center justify-center rounded overflow-hidden"></div>
+                <button onclick="stopScanner()" class="w-full mt-2 bg-red-500 text-white py-1 rounded font-semibold hover:bg-red-600 transition text-sm">Batalkan Scan</button>
+            </div>
+
+            <p id="status-pesan" class="text-center text-sm font-medium mt-4"></p>
+        </div>
+
+        <div id="admin-section" class="hidden">
+            
+            <div class="mb-8 p-4 bg-gray-100 rounded border">
+                <h2 class="text-lg font-bold text-gray-800 mb-2">Buat QR Code Absensi</h2>
+                <div class="flex space-x-2 mb-4">
+                    <input type="text" id="qr-input" placeholder="Nama Sesi / Kegiatan..." class="w-full p-2 border rounded outline-none">
+                    <button onclick="buatQR()" class="bg-blue-600 text-white px-4 py-2 rounded font-semibold hover:bg-blue-700">Buat</button>
+                </div>
+                <div id="qrcode-box" class="hidden flex flex-col items-center justify-center bg-white p-4 border rounded">
+                    <div id="qrcode-canvas" class="mb-2"></div>
+                </div>
+            </div>
+
+            <h2 class="text-lg font-bold text-gray-800 mb-2">Data Kehadiran (Live)</h2>
+            <div class="flex justify-end mb-2">
+                <button onclick="clearData()" class="text-xs bg-red-500 text-white px-3 py-1.5 rounded hover:bg-red-600 transition">Hapus Semua Data</button>
+            </div>
+            
+            <div class="overflow-x-auto border rounded">
+                <table class="w-full text-left border-collapse text-sm">
+                    <thead>
+                        <tr class="bg-gray-200">
+                            <th class="p-2 border-b">Waktu</th>
+                            <th class="p-2 border-b">Nama</th>
+                            <th class="p-2 border-b">Sesi (QR)</th>
+                            <th class="p-2 border-b">Lokasi</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tabel-absen">
+                        </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // ==========================================
+        // MASUKKAN KODE FIREBASE ANDA DI SINI
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "API_KEY_ANDA_DI_SINI",
+            authDomain: "PROYEK_ANDA.firebaseapp.com",
+            databaseURL: "https://PROYEK_ANDA.firebaseio.com",
+            projectId: "PROYEK_ANDA",
+            storageBucket: "PROYEK_ANDA.appspot.com",
+            messagingSenderId: "SENDER_ID_ANDA",
+            appId: "APP_ID_ANDA"
+        };
+        // ==========================================
+
+        // Inisialisasi Firebase
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const database = firebase.database();
+
+        let html5QrcodeScanner;
+        let isScannerRunning = false;
+
+        // --- NAVIGASI TAB ---
+        function switchTab(tab) {
+            const userSec = document.getElementById('user-section');
+            const adminSec = document.getElementById('admin-section');
+            const statusPesan = document.getElementById('status-pesan');
+            
+            statusPesan.innerText = '';
+            stopScanner();
+
+            if (tab === 'user') {
+                userSec.classList.remove('hidden');
+                adminSec.classList.add('hidden');
+            } else {
+                userSec.classList.add('hidden');
+                adminSec.classList.remove('hidden');
+                loadAdminData(); // Muat data dari database saat buka panel admin
+            }
+        }
+
+        // --- FITUR ADMIN: BUAT QR ---
+        function buatQR() {
+            const teksQR = document.getElementById('qr-input').value;
+            const qrBox = document.getElementById('qrcode-box');
+            const qrCanvas = document.getElementById('qrcode-canvas');
+
+            if (!teksQR) { alert("Masukkan nama sesi!"); return; }
+            qrCanvas.innerHTML = "";
+            new QRCode(qrCanvas, { text: teksQR, width: 200, height: 200 });
+            qrBox.classList.remove('hidden');
+        }
+
+        // --- FITUR PENGGUNA: SCANNER ---
+        function mulaiScanner() {
+            const namaInput = document.getElementById('nama-user').value.trim();
+            if (!namaInput) { alert("Harap masukkan Nama Lengkap Anda!"); return; }
+
+            document.getElementById('scanner-container').classList.remove('hidden');
+            
+            if (!isScannerRunning) {
+                html5QrcodeScanner = new Html5QrcodeScanner("reader", { fps: 10, qrbox: 250 });
+                html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+                isScannerRunning = true;
+            }
+        }
+
+        function stopScanner() {
+            if (html5QrcodeScanner && isScannerRunning) {
+                html5QrcodeScanner.clear();
+                isScannerRunning = false;
+                document.getElementById('scanner-container').classList.add('hidden');
+            }
+        }
+
+        function onScanSuccess(decodedText) {
+            stopScanner();
+            const statusPesan = document.getElementById('status-pesan');
+            const namaUser = document.getElementById('nama-user').value.trim();
+            
+            statusPesan.innerText = "Memproses lokasi GPS Anda...";
+            statusPesan.className = "text-center text-sm font-medium mt-2 text-blue-600";
+
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => simpanAbsen(namaUser, decodedText, position.coords.latitude, position.coords.longitude),
+                    (error) => {
+                        statusPesan.innerText = "Gagal absen: Akses lokasi ditolak. Wajib aktifkan GPS.";
+                        statusPesan.className = "text-center text-sm font-bold mt-2 text-red-600";
+                    },
+                    { enableHighAccuracy: true }
+                );
+            } else {
+                alert("Browser tidak mendukung lokasi.");
+            }
+        }
+
+        function onScanFailure(error) { /* Abaikan */ }
+
+        // --- FITUR SIMPAN KE FIREBASE ---
+        function simpanAbsen(nama, sesiQR, lat, lng) {
+            const statusPesan = document.getElementById('status-pesan');
+            const waktu = new Date().toLocaleString('id-ID');
+            const timestamp = Date.now(); // Untuk mengurutkan data
+
+            const dataBaru = { waktu, nama, sesiQR, lat, lng, timestamp };
+
+            // Push data ke Firebase (Realtime Database)
+            database.ref('data_absensi').push(dataBaru)
+                .then(() => {
+                    statusPesan.innerText = `Absen Berhasil atas nama ${nama}!`;
+                    statusPesan.className = "text-center text-lg font-bold mt-2 text-green-600 p-2 bg-green-100 rounded";
+                    document.getElementById('nama-user').value = ""; // Reset form
+                })
+                .catch((error) => {
+                    statusPesan.innerText = "Gagal mengirim data ke server. Coba lagi.";
+                    statusPesan.className = "text-center text-sm font-bold mt-2 text-red-600";
+                    console.error("Error Firebase:", error);
+                });
+        }
+
+        // --- FITUR AMBIL DATA DARI FIREBASE (LIVE) ---
+        function loadAdminData() {
+            const tabel = document.getElementById('tabel-absen');
+            tabel.innerHTML = '<tr><td colspan="4" class="text-center p-4 text-gray-500">Memuat data dari server...</td></tr>';
+
+            // .on('value') membuat tabel otomatis update jika ada yang absen detik itu juga
+            database.ref('data_absensi').orderByChild('timestamp').on('value', (snapshot) => {
+                tabel.innerHTML = '';
+                const data = snapshot.val();
+
+                if (!data) {
+                    tabel.innerHTML = '<tr><td colspan="4" class="text-center p-4 text-gray-500 italic">Belum ada data kehadiran.</td></tr>';
+                    return;
+                }
+
+                // Ubah data dari Firebase menjadi Array dan balik urutannya (terbaru di atas)
+                const daftarAbsen = Object.keys(data).map(key => data[key]).reverse();
+
+                daftarAbsen.forEach(absen => {
+                    const linkPeta = `https://www.google.com/maps?q=${absen.lat},${absen.lng}`;
+                    const row = `
+                        <tr class="border-b hover:bg-gray-50 transition">
+                            <td class="p-2 whitespace-nowrap">${absen.waktu}</td>
+                            <td class="p-2 font-bold">${absen.nama}</td>
+                            <td class="p-2 font-mono text-xs text-blue-700">${absen.sesiQR}</td>
+                            <td class="p-2">
+                                <a href="${linkPeta}" target="_blank" class="text-blue-500 hover:text-blue-700 font-medium underline">Peta</a>
+                            </td>
+                        </tr>
+                    `;
+                    tabel.innerHTML += row;
+                });
+            });
+        }
+
+        // --- FITUR HAPUS DATA DI FIREBASE ---
+        function clearData() {
+            if(confirm("Yakin ingin mereset seluruh data dari server? Semua perangkat akan kehilangan data ini.")) {
+                database.ref('data_absensi').remove()
+                    .catch((error) => {
+                        alert("Gagal menghapus data: " + error.message);
+                    });
+            }
+        }
+    </script>
+</body>
+</html>
